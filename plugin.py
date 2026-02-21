@@ -465,6 +465,9 @@ class TimelineEditorPlugin(WAN2GPPlugin):
 </style>
 """
 
+        # Pré-traitement de la variable pour éviter l'erreur de f-string en Python < 3.12
+        escaped_ui_body = UI_BODY_HTML.replace("`", "\\`")
+
         js = rf"""
 function() {{
   // ---- utilities ----
@@ -541,7 +544,7 @@ function() {{
     if (!mount) return false;
     if (mount.dataset.mounted === "1") return true;
 
-    mount.innerHTML = `{UI_BODY_HTML.replace("`", "\\`")}`;
+    mount.innerHTML = `{escaped_ui_body}`;
     mount.dataset.mounted = "1";
     return true;
   }}
@@ -571,7 +574,7 @@ function() {{
     // Keep a small UI-only state (the authoritative state is project_json from backend)
     const ui = {{
       activeTool: "selection",
-      dragging: null, // {clipId, startX, startLeftPx}
+      dragging: null, // {{clipId, startX, startLeftPx}}
     }};
 
     function setCursor() {{
