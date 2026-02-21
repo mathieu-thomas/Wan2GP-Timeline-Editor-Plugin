@@ -462,9 +462,15 @@ class TimelineEditorPlugin(WAN2GPPlugin):
   #tab-explorer { display: none !important; }
 </style>
 """
+        
+        # Sécurisation ultime : on injecte le code HTML via json.dumps
+        # ce qui permet d'éviter l'erreur des f-strings avec les backslashes en Python 3.11
+        ui_body_js = json.dumps(UI_BODY_HTML)
 
         js = rf"""
 function() {{
+  const UI_BODY_HTML = {ui_body_js};
+
   // ---- utilities ----
   function $(sel, root=document) {{ return root.querySelector(sel); }}
 
@@ -539,7 +545,7 @@ function() {{
     if (!mount) return false;
     if (mount.dataset.mounted === "1") return true;
 
-    mount.innerHTML = `{UI_BODY_HTML.replace("`", "\\`")}`;
+    mount.innerHTML = UI_BODY_HTML;
     mount.dataset.mounted = "1";
     return true;
   }}
@@ -979,6 +985,7 @@ function() {{
                 return f"id_{abs(hash(os.urandom(16)))}"
 
             def on_upload(files, raw_proj: str):
+                print("UPLOAD:", files)
                 p = loads_project(raw_proj)
                 if not files:
                     return raw_proj, compute_preview_uri(self, p)
