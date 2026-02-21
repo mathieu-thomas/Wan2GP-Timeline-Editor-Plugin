@@ -207,40 +207,52 @@ class TimelineEditorPlugin(WAN2GPPlugin):
     def create_ui(self):
         mount_container = "<div id='nle-mount'></div>"
 
+        # Hidden bridges
+        project_json = gr.Textbox(value=dumps_project(default_project()), visible="hidden", elem_id="te-project-json")
+        cmd_json = gr.Textbox(value="", visible="hidden", elem_id="te-cmd-json")
+        preview_uri = gr.Textbox(value="", visible="hidden", elem_id="te-preview-uri")
+
+        # Hidden uploader used by the UI button (Import)
+        uploader = gr.File(label="Uploader", file_count="multiple", type="filepath", visible="hidden", elem_id="nle-upload")
+
         # Your HTML "body" (NO <!DOCTYPE>, NO <html>, NO <head>, NO external <script src=...>, NO inline <script>).
+        # UI stays the same visually. We only add:
+        # - id hooks (already present)
+        # - we will hide Explorer + preview timestamp via CSS in JS stage (no markup change).
         UI_BODY_HTML = r"""
 <main class="flex-1 flex flex-col min-h-0">
-    <!-- TOP HALF -->
+    <!-- MOITIÉ SUPÉRIEURE -->
     <div class="flex h-[55%] min-h-0 border-b panel-border">
 
-        <!-- TOP LEFT : Effect Controls -->
+        <!-- HAUT GAUCHE : Options d'effet & Source -->
         <div class="w-[28%] flex flex-col panel-bg border-r panel-border">
             <div class="flex items-center justify-between px-3 py-2 border-b border-[#2a2a2a] bg-[#1a1a1a]">
                 <div class="flex gap-4">
-                    <span class="tab-active font-medium cursor-pointer">Effect Controls <i class="ph ph-list ml-1 text-gray-500"></i></span>
+                    <span class="text-gray-400 cursor-pointer">Source : (sans élément)</span>
+                    <span class="tab-active font-medium cursor-pointer">Options d'effet <i class="ph ph-list ml-1 text-gray-500"></i></span>
                 </div>
             </div>
             <div class="flex-1 p-3 flex flex-col gap-2 overflow-auto" id="effect-panel">
-                <span class="text-gray-500">(Select a clip to view FFmpeg parameters)</span>
+                <span class="text-gray-500">(Sélectionnez un clip pour voir les paramètres FFmpeg)</span>
             </div>
         </div>
 
-        <!-- TOP RIGHT : Program Monitor -->
+        <!-- HAUT DROITE : Moniteur du Programme -->
         <div class="flex-1 flex flex-col panel-bg">
             <div class="flex items-center justify-between px-3 py-2 border-b border-[#2a2a2a] bg-[#1a1a1a]">
-                <span class="text-gray-400 font-medium">Program: Sequence 01 <i class="ph ph-list ml-1 text-gray-500"></i></span>
+                <span class="text-gray-400 font-medium">Programme : Séquence FFmpeg 01 <i class="ph ph-list ml-1 text-gray-500"></i></span>
             </div>
 
             <div class="flex-1 bg-black flex items-center justify-center relative overflow-hidden group">
                 <img
                     id="program-preview"
-                    src=""
-                    alt="Video Preview"
-                    class="max-w-full max-h-full object-contain pointer-events-none opacity-0 mix-blend-lighten"
+                    src="https://images.unsplash.com/photo-1542382156909-9ae37b3f56fd?q=80&w=1200&auto=format&fit=crop"
+                    alt="Previsualisation Video"
+                    class="max-w-full max-h-full object-contain pointer-events-none opacity-80 mix-blend-lighten"
                     style="filter: sepia(40%) hue-rotate(-10deg) saturate(150%) contrast(120%);">
                 <div class="absolute inset-0 bg-orange-900/20 mix-blend-overlay"></div>
 
-                <!-- Timecode Overlay (hidden in CSS) -->
+                <!-- Timecode Overlay (will be hidden in JS/CSS) -->
                 <div class="absolute top-4 right-4 text-white/50 font-mono text-xl tracking-widest drop-shadow-md" id="preview-timecode">
                     00:00:00:00
                 </div>
@@ -251,14 +263,14 @@ class TimelineEditorPlugin(WAN2GPPlugin):
                     <div class="flex items-center gap-3">
                         <span class="text-[#2d8ceb] font-mono" id="main-timecode">00:00:00:00</span>
                         <span class="text-gray-400 bg-[#2a2a2a] px-2 py-0.5 rounded text-xxs flex items-center gap-1 cursor-pointer hover:text-white">
-                            Fit <i class="ph ph-caret-down"></i>
+                            Adapter <i class="ph ph-caret-down"></i>
                         </span>
                     </div>
 
                     <div class="flex items-center gap-4 text-gray-400 text-lg">
                         <i class="ph ph-brackets-angle hover:text-white cursor-pointer"></i>
                         <i class="ph ph-skip-back hover:text-white cursor-pointer"></i>
-                        <i class="ph-fill ph-play hover:text-white cursor-pointer text-xl" id="btn-play"></i>
+                        <i class="ph-fill ph-play hover:text-white cursor-pointer text-xl"></i>
                         <i class="ph ph-skip-forward hover:text-white cursor-pointer"></i>
                         <i class="ph ph-camera hover:text-white cursor-pointer"></i>
                     </div>
@@ -273,14 +285,14 @@ class TimelineEditorPlugin(WAN2GPPlugin):
         </div>
     </div>
 
-    <!-- BOTTOM HALF -->
+    <!-- MOITIÉ INFÉRIEURE -->
     <div class="flex flex-1 min-h-0">
 
-        <!-- BOTTOM LEFT : Media Explorer -->
+        <!-- BAS GAUCHE : Explorateur de médias -->
         <div class="w-[28%] flex flex-col panel-bg border-r panel-border" id="media-panel">
             <div class="flex items-center gap-4 px-3 py-2 border-b border-[#2a2a2a] bg-[#1a1a1a]">
-                <span class="tab-active font-medium cursor-pointer">Project <i class="ph ph-list ml-1 text-gray-500"></i></span>
-                <span class="text-gray-400 cursor-pointer" id="tab-explorer">Explorer</span>
+                <span class="tab-active font-medium cursor-pointer">Projet <i class="ph ph-list ml-1 text-gray-500"></i></span>
+                <span class="text-gray-400 cursor-pointer" id="tab-explorer">Explorateur</span>
             </div>
 
             <div class="p-2 flex justify-between items-center border-b border-[#2a2a2a]">
@@ -290,16 +302,15 @@ class TimelineEditorPlugin(WAN2GPPlugin):
                 <div class="flex gap-2 text-gray-400">
                     <i class="ph ph-list cursor-pointer hover:text-white"></i>
                     <i class="ph ph-grid-four cursor-pointer text-white"></i>
-                    <span class="text-xxs ml-2" id="media-count">0 item(s)</span>
+                    <span class="text-xxs ml-2" id="media-count">0 élément(s)</span>
                 </div>
             </div>
 
-            <!-- Media Pool (will host drop overlay & hidden gr.File) -->
             <div class="flex-1 p-2 flex gap-2 overflow-auto items-start content-start flex-wrap relative transition-colors duration-200" id="media-pool">
                 <div class="absolute inset-0 flex items-center justify-center text-gray-600 pointer-events-none border-2 border-transparent z-0" id="drag-overlay">
                     <div class="text-center flex flex-col items-center">
                         <i class="ph ph-download-simple text-3xl mb-2"></i>
-                        <span>Drop files here</span>
+                        <span>Glissez-déposez des fichiers ici</span>
                     </div>
                 </div>
             </div>
@@ -312,19 +323,19 @@ class TimelineEditorPlugin(WAN2GPPlugin):
             </div>
         </div>
 
-        <!-- TOOLS -->
+        <!-- BARRE D'OUTILS -->
         <div class="w-10 flex flex-col items-center py-2 panel-bg border-r panel-border gap-3 text-gray-400 shrink-0" id="tools-panel">
-            <i class="ph-fill ph-cursor text-white hover:text-white cursor-pointer tool-active" data-tool="selection" title="Selection Tool (V)"></i>
+            <i class="ph-fill ph-cursor text-white hover:text-white cursor-pointer tool-active" data-tool="selection" title="Outil Sélection (V)"></i>
             <i class="ph ph-arrows-right hover:text-white cursor-pointer" data-tool="track"></i>
             <i class="ph ph-scissors hover:text-white cursor-pointer" data-tool="ripple"></i>
-            <i class="ph-fill ph-knife hover:text-white cursor-pointer" data-tool="razor" title="Razor Tool (C)"></i>
+            <i class="ph-fill ph-knife hover:text-white cursor-pointer" data-tool="razor" title="Outil Cutter (C)"></i>
             <i class="ph ph-corners-out hover:text-white cursor-pointer" data-tool="slip"></i>
             <i class="ph-fill ph-pen-nib hover:text-white cursor-pointer" data-tool="pen"></i>
             <i class="ph-fill ph-hand-palm hover:text-white cursor-pointer" data-tool="hand"></i>
             <i class="ph ph-text-t hover:text-white cursor-pointer" data-tool="text"></i>
         </div>
 
-        <!-- BOTTOM RIGHT : Timeline -->
+        <!-- BAS DROITE : Timeline -->
         <div class="flex-1 flex flex-col panel-bg relative overflow-hidden">
 
             <!-- Timeline Header (Ruler) -->
@@ -427,6 +438,9 @@ class TimelineEditorPlugin(WAN2GPPlugin):
     background: linear-gradient(to top, #00ff00 0%, #00ff00 75%, #ffff00 75%, #ffff00 90%, #ff0000 90%, #ff0000 100%);
   }
 
+  /* Drag highlight */
+  .drag-over { background-color: #2a2a2a !important; border: 2px dashed #2d8ceb !important; }
+
   /* Clips & tools */
   .clip { transition: filter 0.1s; position: absolute; height: calc(100% - 2px); top: 1px; display: flex; align-items: center; padding: 0 4px; overflow: hidden; border-radius: 2px; }
   .clip:hover { filter: brightness(1.2); }
@@ -441,30 +455,13 @@ class TimelineEditorPlugin(WAN2GPPlugin):
   .cursor-select { cursor: default !important; }
   .razor-line { position: absolute; top: 0; bottom: 0; width: 1px; background: red; pointer-events: none; z-index: 50; display: none; }
 
-  /* Hidden items safeguards */
+  /* Requested: hide preview timestamp overlay without changing UI markup */
   #preview-timecode { display: none !important; }
-  #tab-explorer { display: none !important; }
-  #te-project-json, #te-cmd-json, #te-preview-uri { display: none !important; }
 
-  /* Media Pool Uploader Overlay */
-  #nle-upload {
-      position: absolute !important;
-      inset: 0 !important;
-      opacity: 0 !important;
-      z-index: 10 !important;
-      pointer-events: auto !important;
-  }
-  
-  /* Media items need to sit above the hidden uploader for internal drags */
-  #media-pool > div[data-media-id] {
-      z-index: 20;
-  }
-  .drag-over { background-color: #2a2a2a !important; border: 2px dashed #2d8ceb !important; }
+  /* Requested: remove Explorer tab without changing UI layout */
+  #tab-explorer { display: none !important; }
 </style>
 """
-
-        # Pré-traitement de la variable pour éviter l'erreur de f-string en Python < 3.12
-        escaped_ui_body = UI_BODY_HTML.replace("`", "\\`")
 
         js = rf"""
 function() {{
@@ -542,7 +539,7 @@ function() {{
     if (!mount) return false;
     if (mount.dataset.mounted === "1") return true;
 
-    mount.innerHTML = `{escaped_ui_body}`;
+    mount.innerHTML = `{UI_BODY_HTML.replace("`", "\\`")}`;
     mount.dataset.mounted = "1";
     return true;
   }}
@@ -568,24 +565,6 @@ function() {{
     const programPreview = $("#program-preview");
     const btnImport = $("#btn-import");
     const hiddenFileInput = $("#nle-upload input[type=file]");
-
-    // Protect global window drops so browser doesn't navigate away
-    window.addEventListener("dragover", (e) => {{
-      if (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes("Files")) {{
-        e.preventDefault();
-      }}
-    }});
-    window.addEventListener("drop", (e) => {{
-      if (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes("Files")) {{
-        e.preventDefault();
-      }}
-    }});
-
-    // Mount the real Gradio uploader into the Media Pool
-    const uploaderEl = document.getElementById("nle-upload");
-    if (uploaderEl && mediaPool) {{
-      mediaPool.appendChild(uploaderEl);
-    }}
 
     // Keep a small UI-only state (the authoritative state is project_json from backend)
     const ui = {{
@@ -619,23 +598,19 @@ function() {{
 
     function renderMediaPool(p) {{
       if (!mediaPool || !dragOverlay) return;
-      
-      // Preserve the hidden uploader during rerender
-      const uploaderNode = document.getElementById("nle-upload");
       mediaPool.innerHTML = "";
       mediaPool.appendChild(dragOverlay);
-      if (uploaderNode) mediaPool.appendChild(uploaderNode);
 
       const media = p.media || [];
       const mc = $("#media-count");
-      if (mc) mc.innerText = `${{media.length}} item(s)`;
+      if (mc) mc.innerText = `${{media.length}} élément(s)`;
 
       if (media.length > 0) dragOverlay.style.display = "none";
       else dragOverlay.style.display = "flex";
 
       media.forEach(item => {{
         const el = document.createElement("div");
-        el.className = "w-24 flex flex-col gap-1 cursor-pointer p-1 rounded-sm hover:bg-[#2a2a2a] group relative";
+        el.className = "w-24 flex flex-col gap-1 cursor-pointer p-1 rounded-sm hover:bg-[#2a2a2a] group";
         el.draggable = true;
         el.dataset.mediaId = item.id;
 
@@ -710,11 +685,6 @@ function() {{
         clipEl.style.width = `${{widthPx}}px`;
         clipEl.dataset.clipId = c.id;
 
-        // Visual selection indicator
-        if (p.selected_clip_id === c.id) {{
-            clipEl.style.border = "1px solid white";
-        }}
-
         clipEl.innerHTML = `
           <span class="text-white text-[10px] truncate whitespace-nowrap drop-shadow-md pointer-events-none select-none px-1">
             ${{(findMediaName(p, c.media_id) || c.id)}}
@@ -757,42 +727,29 @@ function() {{
 
         track.appendChild(clipEl);
       }});
-    }}
 
-    // Refactored Drag & Drop on the tracks container
-    if (tracksContent) {{
-      tracksContent.addEventListener("dragover", (e) => {{
-        if (e.dataTransfer.types.includes("text/plain")) {{
+      // Enable drop media onto tracks
+      document.querySelectorAll(".track").forEach(track => {{
+        track.ondragover = (e) => {{
           e.preventDefault();
-          const trackEl = e.target.closest(".track");
-          document.querySelectorAll(".track").forEach(t => t.classList.remove("drag-over"));
-          if (trackEl) trackEl.classList.add("drag-over");
-        }}
-      }});
+          track.classList.add("drag-over");
+        }};
+        track.ondragleave = (e) => {{
+          e.preventDefault();
+          track.classList.remove("drag-over");
+        }};
+        track.ondrop = (e) => {{
+          e.preventDefault();
+          track.classList.remove("drag-over");
+          const mediaId = e.dataTransfer.getData("text/plain");
+          if (!mediaId) return;
 
-      tracksContent.addEventListener("dragleave", (e) => {{
-         document.querySelectorAll(".track").forEach(t => t.classList.remove("drag-over"));
-      }});
-
-      tracksContent.addEventListener("drop", (e) => {{
-        document.querySelectorAll(".track").forEach(t => t.classList.remove("drag-over"));
-        const mediaId = e.dataTransfer.getData("text/plain");
-        if (!mediaId) return;
-        e.preventDefault();
-
-        const trackEl = e.target.closest(".track");
-        const trackId = trackEl && trackEl.dataset.track ? trackEl.dataset.track : "V1";
-
-        const p = safeParse(projEl.value);
-        if (!p) return;
-        const ppf = p.px_per_frame || 2.0;
-
-        // Use the container's rect left position to get absolute internal drop offset
-        const rect = tracksContent.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const startF = Math.max(0, Math.round(x / ppf));
-
-        sendCmd(cmdEl, {{ type: "ADD_CLIP", media_id: mediaId, track_id: trackId, start_f: startF }});
+          const rect = track.getBoundingClientRect();
+          const x = e.clientX - rect.left;
+          const startF = Math.max(0, Math.round(x / ppf));
+          const trackId = track.dataset.track;
+          sendCmd(cmdEl, {{ type: "ADD_CLIP", media_id: mediaId, track_id: trackId, start_f: startF }});
+        }};
       }});
     }}
 
@@ -805,7 +762,7 @@ function() {{
       if (!effectPanel) return;
       const c = (p.clips || []).find(x => x.id === p.selected_clip_id);
       if (!c) {{
-        effectPanel.innerHTML = `<span class="text-gray-500">(Select a clip to view FFmpeg parameters)</span>`;
+        effectPanel.innerHTML = `<span class="text-gray-500">(Sélectionnez un clip pour voir les paramètres FFmpeg)</span>`;
         return;
       }}
       const m = (p.media || []).find(x => x.id === c.media_id);
@@ -822,76 +779,6 @@ function() {{
         </div>
       `;
     }}
-
-    // Playback loop handler
-    let playing = false;
-    let lastSync = 0;
-
-    function togglePlay() {{
-      playing = !playing;
-      const playBtnIcon = document.getElementById("btn-play");
-      if (playBtnIcon) {{
-        if (playing) {{
-          playBtnIcon.classList.remove("ph-play");
-          playBtnIcon.classList.add("ph-pause");
-        }} else {{
-          playBtnIcon.classList.remove("ph-pause");
-          playBtnIcon.classList.add("ph-play");
-        }}
-      }}
-
-      if (!playing) return;
-
-      const tickMs = 40; // ~25fps clock
-      const syncEveryMs = 120; // backend preview throttle (~8fps)
-
-      const loop = () => {{
-        if (!playing) return;
-
-        const p = safeParse(projEl.value);
-        if (!p) return;
-
-        const fps = p.fps || 25.0;
-        const nextFrame = (p.playhead_f || 0) + 1;
-        
-        // optimistically update playhead locally to stop backward stutter
-        p.playhead_f = nextFrame;
-        projEl.value = JSON.stringify(p);
-
-        // sync with backend periodically
-        const now = Date.now();
-        if (now - lastSync >= syncEveryMs) {{
-          lastSync = now;
-          sendCmd(cmdEl, {{ type: "SET_PLAYHEAD", frame: nextFrame }});
-        }} else {{
-          // Local playhead update without generating thumbnail
-          const tc = frameToTimecode(nextFrame, fps);
-          if (mainTimecode) mainTimecode.innerText = tc;
-          if (rulerTimecode) rulerTimecode.innerText = tc;
-
-          const ppf = p.px_per_frame || 2.0;
-          const playX = Math.max(0, Math.round(nextFrame * ppf));
-          if (playheadHead) playheadHead.style.left = `${{playX}}px`;
-          if (playheadLine) playheadLine.style.left = `${{playX + 160}}px`;
-        }}
-
-        setTimeout(loop, tickMs);
-      }};
-
-      loop();
-    }}
-
-    const playBtn = document.getElementById("btn-play");
-    if (playBtn) playBtn.addEventListener("click", togglePlay);
-
-    // Delete Clip Hotkey Handler
-    document.addEventListener("keydown", (e) => {{
-      if (e.key === "Delete" || e.key === "Backspace") {{
-        // Evite de supprimer si on est dans un champ texte
-        if (document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA")) return;
-        sendCmd(cmdEl, {{ type: "DELETE_SELECTED" }});
-      }}
-    }});
 
     // Tool switching (English logic, UI unchanged)
     if (toolsPanel) {{
@@ -911,9 +798,6 @@ function() {{
     // Ruler playhead drag
     if (ruler) {{
       ruler.addEventListener("mousedown", (e) => {{
-        // Auto-pause when scrubbing
-        if (playing) togglePlay(); 
-
         const p = safeParse(projEl.value);
         if (!p) return;
         const rect = ruler.getBoundingClientRect();
@@ -984,23 +868,45 @@ function() {{
       ui.dragging = null;
     }});
 
+    // Media pool drag&drop import area (kept, but real import uses hidden file input)
+    if (mediaPool && dragOverlay) {{
+      mediaPool.addEventListener("dragover", (e) => {{
+        e.preventDefault();
+        mediaPool.classList.add("drag-over");
+        dragOverlay.style.zIndex = "10";
+      }});
+      mediaPool.addEventListener("dragleave", (e) => {{
+        e.preventDefault();
+        mediaPool.classList.remove("drag-over");
+        dragOverlay.style.zIndex = "0";
+      }});
+    }}
+
     // Import button (click hidden file input)
     if (btnImport && hiddenFileInput) {{
-      btnImport.addEventListener("click", () => hiddenFileInput.click());
+      btnImport.addEventListener("click", (e) => {{
+        e.preventDefault();
+        e.stopPropagation();
+        hiddenFileInput.click();
+      }});
+    }}
+
+    // Make the whole "Drop files here" area clickable too
+    if (mediaPool && hiddenFileInput) {{
+      mediaPool.addEventListener("click", (e) => {{
+        // Avoid stealing clicks from draggable media thumbnails if you add them later
+        if (e.target.closest("[data-media-id]")) return;
+        hiddenFileInput.click();
+      }});
     }}
 
     // Preview URI -> program image
     prevEl.addEventListener("input", () => {{
       const uri = prevEl.value || "";
-      if (programPreview) {{
-        if (uri.startsWith("data:image/")) {{
-          programPreview.src = uri;
-          programPreview.style.opacity = "1";
-          programPreview.classList.remove("mix-blend-lighten");
-        }} else {{
-          programPreview.removeAttribute("src");
-          programPreview.style.opacity = "0";
-        }}
+      if (programPreview && uri.startsWith("data:image/")) {{
+        programPreview.src = uri;
+        programPreview.style.opacity = "1";
+        programPreview.classList.remove("mix-blend-lighten");
       }}
     }});
 
@@ -1044,19 +950,12 @@ function() {{
 }}
 """
 
-        # Les composants Gradio cachés qui causent DuplicateBlockError
-        # doivent être définis *à l'intérieur* du bloc `gr.Blocks` sans `.render()` 
         with gr.Blocks() as root:
             gr.HTML(mount_container)
-
-            # Instantiation directe à l'intérieur du Block
-            project_json = gr.Textbox(value=dumps_project(default_project()), visible="hidden", elem_id="te-project-json")
-            cmd_json = gr.Textbox(value="", visible="hidden", elem_id="te-cmd-json")
-            preview_uri = gr.Textbox(value="", visible="hidden", elem_id="te-preview-uri")
-            
-            # Composant Gradio File pour l'upload natif 
-            # Il renvoie désormais des listes de chemins de fichiers via type="filepath"
-            uploader = gr.File(label="Uploader", file_count="multiple", visible="hidden", elem_id="nle-upload", type="filepath")
+            project_json.render()
+            cmd_json.render()
+            preview_uri.render()
+            uploader.render()
 
             root.load(fn=None, js=js)
 
@@ -1141,11 +1040,6 @@ function() {{
 
                 elif t == "SELECT_CLIP":
                     p.selected_clip_id = cmd.get("clip_id")
-                    
-                elif t == "DELETE_SELECTED":
-                    if p.selected_clip_id:
-                        p.clips = [c for c in p.clips if c.id != p.selected_clip_id]
-                        p.selected_clip_id = None
 
                 elif t == "ADD_CLIP":
                     media_id = cmd.get("media_id")
