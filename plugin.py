@@ -207,14 +207,6 @@ class TimelineEditorPlugin(WAN2GPPlugin):
     def create_ui(self):
         mount_container = "<div id='nle-mount'></div>"
 
-        # Hidden bridges
-        project_json = gr.Textbox(value=dumps_project(default_project()), visible="hidden", elem_id="te-project-json")
-        cmd_json = gr.Textbox(value="", visible="hidden", elem_id="te-cmd-json")
-        preview_uri = gr.Textbox(value="", visible="hidden", elem_id="te-preview-uri")
-
-        # Hidden uploader used by the UI button (Import)
-        uploader = gr.File(label="Uploader", file_count="multiple", type="filepath", visible="hidden", elem_id="nle-upload")
-
         # Your HTML "body" (NO <!DOCTYPE>, NO <html>, NO <head>, NO external <script src=...>, NO inline <script>).
         # UI stays the same visually. We only add:
         # - id hooks (already present)
@@ -958,10 +950,14 @@ function() {{
 
         with gr.Blocks() as root:
             gr.HTML(mount_container)
-            project_json.render()
-            cmd_json.render()
-            preview_uri.render()
-            uploader.render()
+
+            # Hidden bridges
+            project_json = gr.Textbox(value=dumps_project(default_project()), visible="hidden", elem_id="te-project-json")
+            cmd_json = gr.Textbox(value="", visible="hidden", elem_id="te-cmd-json")
+            preview_uri = gr.Textbox(value="", visible="hidden", elem_id="te-preview-uri")
+
+            # Hidden uploader used by the UI button (Import)
+            uploader = gr.File(label="Uploader", file_count="multiple", type="filepath", visible="hidden", elem_id="nle-upload")
 
             root.load(fn=None, js=js)
 
