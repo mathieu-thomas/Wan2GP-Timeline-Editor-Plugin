@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import tempfile
+import urllib.parse
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
@@ -73,6 +74,7 @@ class MediaItem:
     frames: Optional[int] = None
     duration_s: Optional[float] = None
     has_audio: Optional[bool] = None
+    url: Optional[str] = None
 
 
 @dataclass
@@ -253,16 +255,21 @@ class TimelineEditorPlugin(WAN2GPPlugin):
             </div>
 
             <div class="flex-1 bg-black flex items-center justify-center relative overflow-hidden group">
+                <video
+                    id="program-video"
+                    class="max-w-full max-h-full object-contain absolute inset-0 opacity-0 transition-opacity duration-200 pointer-events-none"
+                    playsinline>
+                </video>
                 <img
                     id="program-preview"
                     src=""
                     alt="Video Preview"
-                    class="max-w-full max-h-full object-contain pointer-events-none opacity-0 transition-opacity duration-200"
+                    class="max-w-full max-h-full object-contain absolute inset-0 pointer-events-none opacity-0 transition-opacity duration-200"
                     style="filter: sepia(40%) hue-rotate(-10deg) saturate(150%) contrast(120%);">
-                <div class="absolute inset-0 bg-orange-900/20 mix-blend-overlay"></div>
+                <div class="absolute inset-0 bg-orange-900/20 mix-blend-overlay pointer-events-none"></div>
 
                 <!-- Timecode Overlay -->
-                <div class="absolute top-4 right-4 text-white/50 font-mono text-xl tracking-widest drop-shadow-md" id="preview-timecode">
+                <div class="absolute top-4 right-4 text-white/50 font-mono text-xl tracking-widest drop-shadow-md pointer-events-none" id="preview-timecode">
                     00:00:00:00
                 </div>
             </div>
@@ -404,18 +411,6 @@ class TimelineEditorPlugin(WAN2GPPlugin):
                 <div class="w-1/3 h-2 bg-[#444] rounded-full mx-2 cursor-pointer hover:bg-[#555]"></div>
             </div>
         </div>
-
-        <!-- Audio meters -->
-        <div class="w-12 panel-bg border-l panel-border flex flex-col pb-4 shrink-0">
-            <div class="flex-1 flex justify-center gap-1 pt-6 pb-2 px-1 relative">
-                <div class="absolute inset-y-0 right-1 py-6 flex flex-col justify-between text-[8px] text-gray-500 font-mono text-right z-10 pointer-events-none">
-                    <span>0</span><span>-12</span><span>-24</span><span>-36</span><span>-48</span>
-                </div>
-                <div class="w-2.5 bg-[#111] rounded-t-sm border border-[#222] relative overflow-hidden flex flex-col justify-end"><div class="w-full h-[65%] audio-meter" id="meter-l"></div></div>
-                <div class="w-2.5 bg-[#111] rounded-t-sm border border-[#222] relative overflow-hidden flex flex-col justify-end"><div class="w-full h-[60%] audio-meter" id="meter-r"></div></div>
-            </div>
-        </div>
-
     </div>
 </main>
 
@@ -440,11 +435,6 @@ class TimelineEditorPlugin(WAN2GPPlugin):
   .tab-active { color: #ffffff; position: relative; }
   .tab-active::after { content: ''; position: absolute; bottom: -6px; left: 0; width: 100%; height: 2px; background-color: #2d8ceb; }
   .text-xxs { font-size: 0.65rem; line-height: 1rem; }
-
-  /* Audio meter */
-  .audio-meter {
-    background: linear-gradient(to top, #00ff00 0%, #00ff00 75%, #ffff00 75%, #ffff00 90%, #ff0000 90%, #ff0000 100%);
-  }
 
   /* Drag highlight */
   .drag-over { background-color: #2a2a2a !important; border: 2px dashed #2d8ceb !important; }
@@ -573,6 +563,7 @@ function() {{
     const mainTimecode = $("#main-timecode");
     const rulerTimecode = $("#ruler-tc");
     const programPreview = $("#program-preview");
+    const programVideo = $("#program-video");
     const btnImport = $("#btn-import");
     const hiddenFileInput = $("#nle-upload input[type='file']") || $("#nle-upload input");
 
@@ -604,13 +595,79 @@ function() {{
       return maxEnd;
     }}
 
+    function getTopVisualClipAtFrame(p, frame) {{
+      const candidates = (p.clips || []).filter(c => (c.kind === "video" || c.kind === "image") && frame >= c.start_f && frame < c.start_f + (c.out_f - c.in_f));
+      if (!candidates.length) return null;
+      candidates.sort((a, b) => {{
+        const ta = parseInt(a.track_id.replace("V", "")) || 0;
+        const tb = parseInt(b.track_id.replace("V", "")) || 0;
+        return tb - ta;
+      }});
+      return candidates[0];
+    }}
+
+    function updatePlayheadUI(frame, p) {{
+      const fps = p.fps || 25.0;
+      const ppf = p.px_per_frame || 2.0;
+
+      const tc = frameToTimecode(frame, fps);
+      if (mainTimecode) mainTimecode.innerText = tc;
+      if (rulerTimecode) rulerTimecode.innerText = tc;
+
+      const playX = Math.max(0, Math.round(frame * ppf));
+      if (playheadHead) playheadHead.style.left = `${{playX}}px`;
+      if (playheadLine) playheadLine.style.left = `${{playX + 160}}px`;
+    }}
+
+    function updateProgramMonitor(p, frame, isPlaying) {{
+      if (!programVideo || !programPreview) return;
+      const clip = getTopVisualClipAtFrame(p, frame);
+      
+      if (!clip) {{
+        programVideo.pause();
+        programVideo.style.opacity = "0";
+        programPreview.style.opacity = "0";
+        return;
+      }}
+      
+      const media = p.media.find(m => m.id === clip.media_id);
+      if (!media) return;
+
+      if (clip.kind === "video" && media.url) {{
+        programPreview.style.opacity = "0";
+        programVideo.style.opacity = "1";
+        
+        const targetUrl = new URL(media.url, window.location.origin).href;
+        if (programVideo.src !== targetUrl) {{
+          programVideo.src = media.url;
+          programVideo.load();
+        }}
+        
+        const fps = p.fps || 25.0;
+        const targetTime = (clip.in_f + (frame - clip.start_f)) / fps;
+        
+        if (Math.abs(programVideo.currentTime - targetTime) > 0.1 || !isPlaying) {{
+          programVideo.currentTime = targetTime;
+        }}
+        
+        if (isPlaying && programVideo.paused) {{
+          programVideo.play().catch(() => {{}});
+        }} else if (!isPlaying && !programVideo.paused) {{
+          programVideo.pause();
+        }}
+      }} else {{
+        programVideo.pause();
+        programVideo.style.opacity = "0";
+        programPreview.style.opacity = "1";
+      }}
+    }}
+
     function playbackLoop(ts) {{
       if (!playing) return;
       rafId = requestAnimationFrame(playbackLoop);
 
       const dt = ts - lastTs;
       lastTs = ts;
-      // Cap dt so returning to tab doesn't jump forward crazily
       accumMs += Math.min(dt, 100);
 
       const p = safeParse(projEl.value);
@@ -629,25 +686,22 @@ function() {{
         }} else {{
           playing = false;
           if (btnPlay) btnPlay.classList.replace("ph-pause", "ph-play");
+          if (programVideo) programVideo.pause();
           sendCmd(cmdEl, {{ type: "SET_PLAYHEAD", frame: uiPlayheadF }});
           break;
         }}
       }}
 
       if (updated) {{
-        const tc = frameToTimecode(uiPlayheadF, fps);
-        if (mainTimecode) mainTimecode.innerText = tc;
-        if (rulerTimecode) rulerTimecode.innerText = tc;
+        updatePlayheadUI(uiPlayheadF, p);
+        updateProgramMonitor(p, uiPlayheadF, true);
 
-        const ppf = p.px_per_frame || 2.0;
-        const playX = Math.max(0, Math.round(uiPlayheadF * ppf));
-        if (playheadHead) playheadHead.style.left = `${{playX}}px`;
-        if (playheadLine) playheadLine.style.left = `${{playX + 160}}px`;
-
-        if (ts - lastBackendSyncTs > 120) {{
-          lastBackendSyncTs = ts;
-          // Send PREVIEW_AT instead of SET_PLAYHEAD to avoid state overwrite
-          sendCmd(cmdEl, {{ type: "PREVIEW_AT", frame: uiPlayheadF }});
+        const activeClip = getTopVisualClipAtFrame(p, uiPlayheadF);
+        if (!activeClip || activeClip.kind !== "video") {{
+          if (ts - lastBackendSyncTs > 250) {{
+            lastBackendSyncTs = ts;
+            sendCmd(cmdEl, {{ type: "PREVIEW_AT", frame: uiPlayheadF }});
+          }}
         }}
       }}
     }}
@@ -658,16 +712,17 @@ function() {{
         if (btnPlay) btnPlay.classList.replace("ph-play", "ph-pause");
         const p = safeParse(projEl.value);
         const maxEnd = p ? getMaxEndFrame(p) : 0;
-        uiPlayheadF = p ? (p.playhead_f || 0) : 0;
         if (uiPlayheadF >= maxEnd && maxEnd > 0) {{
           uiPlayheadF = 0;
         }}
         lastTs = performance.now();
         accumMs = 0;
+        if (p) updateProgramMonitor(p, uiPlayheadF, true);
         rafId = requestAnimationFrame(playbackLoop);
       }} else {{
         if (btnPlay) btnPlay.classList.replace("ph-pause", "ph-play");
         if (rafId) cancelAnimationFrame(rafId);
+        if (programVideo) programVideo.pause();
         sendCmd(cmdEl, {{ type: "SET_PLAYHEAD", frame: uiPlayheadF }});
       }}
     }}
@@ -677,6 +732,12 @@ function() {{
     if (btnHome) {{
       btnHome.addEventListener("click", () => {{
         if (playing) togglePlay();
+        uiPlayheadF = 0;
+        const p = safeParse(projEl.value);
+        if (p) {{
+          updatePlayheadUI(uiPlayheadF, p);
+          updateProgramMonitor(p, uiPlayheadF, false);
+        }}
         sendCmd(cmdEl, {{ type: "SET_PLAYHEAD", frame: 0 }});
       }});
     }}
@@ -685,13 +746,19 @@ function() {{
       btnEnd.addEventListener("click", () => {{
         if (playing) togglePlay();
         const p = safeParse(projEl.value);
-        if (p) sendCmd(cmdEl, {{ type: "SET_PLAYHEAD", frame: getMaxEndFrame(p) }});
+        if (p) {{
+          uiPlayheadF = getMaxEndFrame(p);
+          updatePlayheadUI(uiPlayheadF, p);
+          updateProgramMonitor(p, uiPlayheadF, false);
+          sendCmd(cmdEl, {{ type: "SET_PLAYHEAD", frame: uiPlayheadF }});
+        }}
       }});
     }}
 
     if (btnScreenshot) {{
       btnScreenshot.addEventListener("click", () => {{
-        sendCmd(cmdEl, {{ type: "SCREENSHOT" }});
+        if (playing) togglePlay();
+        sendCmd(cmdEl, {{ type: "SCREENSHOT", frame: uiPlayheadF }});
         const toast = document.createElement("div");
         toast.innerText = "Screenshot captured! (Downloading...)";
         toast.className = "absolute top-4 left-1/2 -translate-x-1/2 bg-[#2d8ceb]/90 text-white px-3 py-1 rounded text-xs shadow-lg z-50 transition-opacity duration-500 pointer-events-none";
@@ -788,20 +855,12 @@ function() {{
       const fps = p.fps || 25.0;
       const ppf = p.px_per_frame || 2.0;
       
-      const currentFrame = playing ? uiPlayheadF : (p.playhead_f || 0);
-
-      const tc = frameToTimecode(currentFrame, fps);
-      if (mainTimecode) mainTimecode.innerText = tc;
-      if (rulerTimecode) rulerTimecode.innerText = tc;
+      updatePlayheadUI(uiPlayheadF, p);
 
       const seqDurEl = $("#sequence-duration");
       if (seqDurEl) {{
         seqDurEl.innerText = frameToTimecode(getMaxEndFrame(p), fps);
       }}
-
-      const playX = Math.max(0, Math.round(currentFrame * ppf));
-      if (playheadHead) playheadHead.style.left = `${{playX}}px`;
-      if (playheadLine) playheadLine.style.left = `${{playX + 160}}px`;
 
       document.querySelectorAll(".track").forEach(track => track.innerHTML = "");
 
@@ -944,8 +1003,10 @@ function() {{
         const ppf = p.px_per_frame || 2.0;
 
         const setFromX = (x) => {{
-          const frame = Math.max(0, Math.round(x / ppf));
-          sendCmd(cmdEl, {{ type: "SET_PLAYHEAD", frame: frame }});
+          uiPlayheadF = Math.max(0, Math.round(x / ppf));
+          updatePlayheadUI(uiPlayheadF, p);
+          updateProgramMonitor(p, uiPlayheadF, false);
+          sendCmd(cmdEl, {{ type: "PREVIEW_AT", frame: uiPlayheadF }});
         }};
 
         setFromX(e.clientX - rect.left);
@@ -954,6 +1015,7 @@ function() {{
         const up = () => {{
           document.removeEventListener("mousemove", move);
           document.removeEventListener("mouseup", up);
+          sendCmd(cmdEl, {{ type: "SET_PLAYHEAD", frame: uiPlayheadF }});
         }};
         document.addEventListener("mousemove", move);
         document.addEventListener("mouseup", up);
@@ -1033,24 +1095,31 @@ function() {{
         lastProjRaw = projEl.value;
         const p = safeParse(lastProjRaw);
         if (p && !playing) {{
+          uiPlayheadF = p.playhead_f || 0;
           renderMediaPool(p);
           renderTimeline(p);
           renderEffectControls(p);
+          updateProgramMonitor(p, uiPlayheadF, false);
         }}
       }}
       
       if (prevEl && prevEl.value !== lastPrevUri) {{
         lastPrevUri = prevEl.value;
         const uri = lastPrevUri || "";
-        if (programPreview) {{
+        const p = safeParse(projEl.value);
+        const activeClip = p ? getTopVisualClipAtFrame(p, uiPlayheadF) : null;
+        
+        // Only update preview img if we aren't currently showing a video
+        if (activeClip && activeClip.kind === "video") {{
+            // do nothing, video handles itself
+        }} else if (programPreview) {{
           if (uri.startsWith("data:image/")) {{
             programPreview.src = uri;
             programPreview.style.opacity = "1";
-            programPreview.classList.remove("opacity-0");
+            if (programVideo) programVideo.style.opacity = "0";
           }} else {{
             programPreview.src = "";
             programPreview.style.opacity = "0";
-            programPreview.classList.add("opacity-0");
           }}
         }}
       }}
@@ -1069,26 +1138,22 @@ function() {{
       const p = safeParse(projEl.value);
       if (!p) return;
       if (!playing) {{
+        uiPlayheadF = p.playhead_f || 0;
         renderMediaPool(p);
         renderTimeline(p);
         renderEffectControls(p);
-      }}
-    }});
-
-    prevEl.addEventListener("input", () => {{
-      const uri = prevEl.value || "";
-      if (programPreview && uri.startsWith("data:image/")) {{
-        programPreview.src = uri;
-        programPreview.style.opacity = "1";
+        updateProgramMonitor(p, uiPlayheadF, false);
       }}
     }});
 
     const p0 = safeParse(projEl.value);
     if (p0) {{
+      uiPlayheadF = p0.playhead_f || 0;
       setCursor();
       renderMediaPool(p0);
       renderTimeline(p0);
       renderEffectControls(p0);
+      updateProgramMonitor(p0, uiPlayheadF, false);
     }}
   }}
 
@@ -1155,6 +1220,8 @@ function() {{
                     item = MediaItem(id=_uid(), name=name, path=path, kind=kind)
 
                     try:
+                        item.url = "/gradio_api/file=" + urllib.parse.quote(path)
+                        
                         if kind == "video":
                             info_fn = getattr(self, "get_video_info", None)
                             if callable(info_fn):
@@ -1214,6 +1281,10 @@ function() {{
                     return raw_proj, prev, "", screenshot_path
 
                 elif t == "SCREENSHOT":
+                    frame = cmd.get("frame")
+                    if frame is not None:
+                        p.playhead_f = max(0, int(frame))
+                        
                     img = _get_preview_image(self, p)
                     if img:
                         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".png", prefix="screenshot_")
